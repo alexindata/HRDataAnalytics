@@ -1,0 +1,270 @@
+---
+title: "HR Data Analysis"
+author: "Alexindata"
+date: "3/15/2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## A. Intro
+
+#### Using a sample human resources dataset from a tech company, effects of the job applicants' gender, race, and early stage performance on the final offers are analyzed. 
+
+#### This analysis is carried out using R, in RStudio.
+
+
+## B. The dataset
+
+```{r data wrangling, echo=T, message=F, cache=F, eval=T, results='markup'}
+library(tidyr)
+library(dplyr)
+library(knitr)
+
+df <- read.csv('data/hr.csv', na.strings='NA', stringsAsFactors=F)
+
+# dataset basic information
+str(df)
+
+# sample rows in the dataset
+head(df, 3)
+
+# number of missing values in each columns
+sapply(df, function(x) sum(is.na(x)))
+
+# number of entries by gender
+table(df$gender)
+
+df[df$race=='black/african american', ]$race <- 'black'
+
+# number of entries by race
+table(df$race)
+
+
+# merge candidate.sources that have alternative spellings
+# table(df$candidate.source)
+df$candidate.source <- tolower(df$candidate.source)
+df[df$candidate.source=='linked-in', ]$candidate.source <- 'linkedin'
+
+# number of entries by source of candidates
+table(df$candidate.source)
+
+```
+
+#### This HR dataset contains information on 10000 applications. Among the 12 column variables are gender, race, and completion status of the 5 stages of the application process (application review, initial screen, tech screen, live interview, and offer).
+
+## C. Data Analysis
+
+### Q1. Analyze the applicant source information broken down by gender and race/ethnicity.
+
+
+```{r q1 setup, echo=T, message=F, cache=F, eval=T, results='markup'}
+colnames(df)[1] <- 'idx'
+df$gender <- factor(df$gender)
+df$race <- factor(df$race)
+df$candidate.source <- factor(df$candidate.source)
+df$candidate.source <- relevel(df$candidate.source, ref='job.site')
+
+by_source_gender <- df %>% select(candidate.source, gender) %>% group_by(gender) %>% count(candidate.source)
+by_source_gender <- spread_(by_source_gender, key_col='gender', value_col='n')
+
+by_source_race <- df %>% select(candidate.source, race) %>% group_by(race) %>% count(candidate.source)
+by_source_race <- spread_(by_source_race, key_col='race', value_col='n')
+
+table1 <- inner_join(by_source_gender, by_source_race, by='candidate.source')
+table1$candidate.source <- c('Job Site', 'Indeed', 'LinkedIn', 'Referral')
+names(table1) <- c('', 'Women', 'Men', 'Asian', 'Black', 'Latinx', 'White')
+
+# # alternative tabulation using table()
+# table(df$candidate.source, df$gender)
+# table(df$candidate.source, df$race)
+
+```
+
+
+```{r q1 output, echo=T, message=F, cache=F, eval=T, results='markup'}
+
+kable(table1, align="r", caption='Table 1: 
+      Stratification of candidate source by gender and by race/ethnicity')
+
+```
+
+
+#### Q1 analysis: Candidate sources marked as 'linked-in' are merged with those marked as 'linkedin', and candidate sources marked as 'referral' are merged with those marked as 'Referral'. The merge is done with the assumption that these are spelling variations.
+
+### Q2. Analyze the pass-through rates for each stage, broken down by gender and race.
+
+
+```{r q2 setup, echo=T, message=F, cache=F, eval=T, results='hide'}
+
+nrow(df[(!is.na(df$initial.screen) & is.na(df$tech.screen)), ]) # 3331
+nrow(df[(is.na(df$initial.screen) & !is.na(df$tech.screen)), ]) # 125 !
+
+nrow(df[!is.na(df$tech.screen) & is.na(df$live.interview), ]) # 168
+nrow(df[is.na(df$tech.screen) & !is.na(df$live.interview), ]) # 2815 !
+
+nrow(df[!is.na(df$live.interview) & is.na(df$offer), ]) # 2005
+nrow(df[is.na(df$live.interview) & !is.na(df$offer), ]) # 0 !
+
+stage2_hopper <- df[(is.na(df$initial.screen) & !is.na(df$tech.screen)), ]
+mean(stage2_hopper$ratings.application.review) # 2.6
+mean(df$ratings.application.review) # 2.6138
+
+#
+by_stage_gender <- df %>% 
+      select(gender, application.review, initial.screen, tech.screen, live.interview, offer) %>% 
+      group_by(gender) %>% summarize(stage1=sum(application.review=='completed'),
+                                     stage2=sum(initial.screen=='completed', na.rm=T),
+                                     stage3=sum(tech.screen=='completed', na.rm=T),
+                                     stage4=sum(live.interview=='completed', na.rm=T),
+                                     stage5=sum(offer=='completed', na.rm=T))
+
+by_stage_gender.T <- t(by_stage_gender[, 2:ncol(by_stage_gender)])
+colnames(by_stage_gender.T) <- by_stage_gender$gender
+
+#
+by_stage_race <- df %>% 
+      select(race, application.review, initial.screen, tech.screen, live.interview, offer) %>% 
+      group_by(race) %>% summarize(stage1=sum(application.review=='completed'),
+                                     stage2=sum(initial.screen=='completed', na.rm=T),
+                                     stage3=sum(tech.screen=='completed', na.rm=T),
+                                     stage4=sum(live.interview=='completed', na.rm=T),
+                                     stage5=sum(offer=='completed', na.rm=T))
+
+by_stage_race.T <- t(by_stage_race[, 2:ncol(by_stage_race)])
+colnames(by_stage_race.T) <- by_stage_race$race
+
+by_stage_all <- cbind(by_stage_gender.T, by_stage_race.T)
+
+table2 <- data.frame(Stage=c('Application Review', 'Initial Screen', 'Tech Screen', 'Live Interview', 'Offer'), by_stage_all)
+colnames(table2)[2:ncol(table2)] <- c('Women', 'Men', 'Asian', 'Black', 'Latinx', 'White')
+
+rownames(table2) <- table2[, 1]
+
+pass_thru <- table2[, 2:ncol(table2)]
+pass_thru[1, ] <- paste0(round(table2[2, 2:ncol(table2)] / 
+                                     table2[1, 2:ncol(table2)], 2) * 100, '%')
+pass_thru[4, ] <- paste0(round(table2[5, 2:ncol(table2)] / 
+                                     table2[4, 2:ncol(table2)], 2) * 100, '%')
+pass_thru[c(2,3,5), ] <- '-'
+
+```
+
+
+```{r q2 output, echo=T, message=F, cache=F, eval=T, results='markup'}
+kable(pass_thru, align="cccccc", caption='Table 2: 
+      Stratification of application stage pass-through rate by gender and by race/ethnicity')
+
+```
+
+
+#### Q2 analysis: Pass-through rates are given for the Application Review and Live Interview stages.
+
+#### Pass-through rates are not appropriate for the Initial Screen stage. There are 125 rows of data that have missing values ('NA') in the Initial Screen column and are marked 'completed' in the Tech Screen column, indicating either incomplete data entry, or that these applicants reached the Tech Screen stage without going through the Initial Screen stage.
+
+#### Pass-through rates are not appropriate for the Tech Screen stage, since there are more applicants in the next stage (Live Interview) than in the Tech Screen stage for each category in gender and race/ethnicity.
+
+#### Pass-through rates are appropriate for the Live Interview stage, since all applicants who have received offer have also completed the Live Interview stage.
+
+
+### Q3. Determine whether pass-through rates vary by gender or by race.
+
+
+```{r q3, echo=T, message=F, cache=F, eval=T, results='markup'}
+stage1_stat <- by_stage_all[1:2, ]
+stage1_stat[1, ] <- stage1_stat[1, ] - stage1_stat[2, ]
+rownames(stage1_stat) <- c('not_pass', 'pass')
+colnames(stage1_stat) <- c('Women', 'Men', 'Asian', 'Black', 'Latinx', 'White')
+
+kable(stage1_stat, align="r", caption='Table 3: Stage1 not_pass/pass by gender and by race/ethnicity')
+
+stage1_gender_stat <- stage1_stat[1:2, 1:2]
+stage1_race_stat <- stage1_stat[1:2, 3:6]
+
+(stat1 <- chisq.test(stage1_gender_stat))
+(stat2 <- chisq.test(stage1_race_stat))
+
+```
+
+
+#### Q3 analysis: 1) Female applicants are less likely to pass through to the second stage; 2) There is no significant difference in the pass-through rates among the 4 race/ethnicities.
+
+#### A chi-square test of independence was performed to examine the relation between stage 1 pass-through rates and gender. The relation between these variables was statistically significant, X-squared = 54.134, df = 1, p-value = 1.873e-13. Female applicants were less likely to pass through the Application Review stage than male applicants.
+
+#### A chi-square test of independence was also performed to examine the relation between stage 1 pass-through rates and race/ethnicity. The relation between these variables was not statistically significant, X-squared = 4.7954, df = 3, p-value = 0.1874. In other words, there is no significant difference in the pass-through rates when comparing any other race/ethnicity to white applicants.
+
+
+### Q4. The data set contains ratings giving to applicants during the application review stage (1=low rating, 4=high rating). Analyze the average ratings broken down by gender and race/ethnicity.
+
+
+```{r q4, echo=T, message=F, cache=F, eval=T, results='markup'}
+by_rating_gender <- df %>% select(c(ratings.application.review, gender)) %>% group_by(gender) %>% summarize(avg_rating=round(mean(ratings.application.review), 2))
+by_rating_gender <- spread_(by_rating_gender, key_col='gender', value_col='avg_rating')
+
+by_rating_race <- df %>% select(c(ratings.application.review, race)) %>% group_by(race) %>% summarize(avg_rating=round(mean(ratings.application.review), 2))
+by_rating_race <- spread_(by_rating_race, key_col='race', value_col='avg_rating')
+
+by_rating <- cbind(by_rating_gender, by_rating_race)
+rownames(by_rating) <- 'Application Review Ratings'
+colnames(by_rating) <- c('Women', 'Men', 'Asian', 'Black', 'Latinx', 'White')
+
+kable(by_rating, caption='Table 4: Average ratings by gender and by race/ethnicity')
+
+```
+
+
+### Q5. Determine whether the ratings at the application review predict having an interview at initial screening.
+
+
+```{r q5, echo=T, message=F, cache=F, eval=T, resutls='markup'}
+# it makes more sense to consider ratings as a factor variable
+
+ratings_predict <- df[, c('initial.screen', 'ratings.application.review', 'gender')]
+ratings_predict[is.na(ratings_predict$initial.screen), ]$initial.screen <- 'not_pass'
+ratings_predict[ratings_predict$initial.screen=='completed', ]$initial.screen <- 'pass'
+
+colnames(ratings_predict) <- c('stage1', 'rating', 'gender')
+ratings_predict$stage1 <- factor(ratings_predict$stage1)
+ratings_predict$rating <- factor(ratings_predict$rating)
+
+fit1 <- glm(stage1 ~ rating, data=ratings_predict, family='binomial')
+summary(fit1)
+round(exp(fit1$coefficients), 2)
+
+```
+
+
+#### Q5 analysis: The ratings at the Application Review stage indeed predict whether a candidate will move on to the next stage.
+
+#### A logistic regression was performed to test the relation between the ratings and pass-through at the Application Review stage. Candidates with ratings of 1 have statistically significant low odds in pass-through, odds = 0.63, degrees of freedom = 9996, p-value = 7.92e-09. Candidates with ratings of 2 have actually decreased odds compared to those with ratings of 1, odds ratio = 0.78, p = 0.00391. Ratings of 3 carry no significance. Candidates with ratings of 4 have significantly better odds in pass-through compared to those with ratings of 1, odds ratio = 2.21, p = 2.96e-14.
+
+
+### Q6. Does the relationship between a candidate’s rating and having an interview at the application stage depend on gender?
+
+
+```{r q6, echo=T, message=F, cache=F, eval=T, results='markup'}
+ratings_predict$gender <- factor(ratings_predict$gender)
+ratings_predict$gender <- relevel(ratings_predict$gender, ref='male')
+
+# order of rating and gender in glm formula does not affect output estimates and stats (p-values)
+fit2 <- glm(stage1 ~ rating * gender, data=ratings_predict, family='binomial')
+summary(fit2)
+round(exp(fit2$coefficients), 2)
+
+```
+
+
+#### Q6 analysis: The relation between a candidate's rating and pass-through is dependent on gender at the Application Review stage.
+
+#### For male candidates, those with ratings of 1 have statistically significant low odds in pass-through, odds = 0.67, degrees of freedom = 9992, p-value = 6.50e-05. Those with ratings of 2 and 3 are not significantly different. Males with ratings of 4 have a significant better odds in pass-through vs. those with ratings of 1, odds ratio = 2.01, p-value = 9.61e-08.
+
+#### Female candidates with ratings of 2 have statistically significant lower odds in pass-through compare to males with ratings of 2, odds ratio = 0.53, p-value = 0.000737. No other ratings carry significance between the genders.
+
+
+```{r sessioninfo and date, echo=F, message=F, cache=F, eval=T, results='markup'}
+sessionInfo()
+date()
+```
+
